@@ -265,7 +265,7 @@ export function FileExchanger() {
     if (!client) {
       toast.error("VS Code не ответил", {
         id,
-        description: "Проверь, что стоит расширение Exchanger 0.5.0 (блок внизу страницы).",
+        description: "Проверь, что стоит расширение Exchanger 0.5.1 (блок внизу страницы).",
       });
       return false;
     }

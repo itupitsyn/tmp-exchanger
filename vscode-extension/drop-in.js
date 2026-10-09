@@ -180,6 +180,19 @@ function registerDropIn({ api, serverUrl, pullFiles, formatSize }) {
     view.onDidChangeVisibility(syncTimer),
     new vscode.Disposable(() => clearInterval(timer)),
     vscode.commands.registerCommand("exchanger.refreshFiles", load),
+    vscode.commands.registerCommand("exchanger.pullAll", async () => {
+      await load();
+      if (error) {
+        vscode.window.showErrorMessage(`Exchanger: ${error}`);
+        return;
+      }
+      if (!files.length) {
+        vscode.window.showInformationMessage("Exchanger: на сервере пусто");
+        return;
+      }
+      const root = await rootFor(undefined);
+      if (root) await pullFiles(root, files);
+    }),
     vscode.commands.registerCommand(
       "exchanger.pullFile",
       async (/** @type {StoredFile} */ file, /** @type {StoredFile[] | undefined} */ selected) => {
