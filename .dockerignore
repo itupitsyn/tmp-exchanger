@@ -1,0 +1,8 @@
+**/node_modules
+**/.next
+**/*.tsbuildinfo
+**/.env*
+**/*.vsix
+web/storage
+.git
+docker-compose.yml

@@ -1,0 +1,73 @@
+{
+  "name": "exchanger",
+  "displayName": "Exchanger",
+  "description": "Отправка и получение файлов через Exchanger с сохранением путей относительно корня проекта",
+  "version": "0.5.0",
+  "publisher": "local",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.97.0"
+  },
+  "categories": ["Other"],
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished", "onUri"],
+  "contributes": {
+    "commands": [
+      { "command": "exchanger.send", "title": "Exchanger: Send", "icon": "$(cloud-upload)" },
+      { "command": "exchanger.pull", "title": "Exchanger: Pull", "icon": "$(cloud-download)" },
+      { "command": "exchanger.openWeb", "title": "Exchanger: Open Web UI", "icon": "$(globe)" },
+      { "command": "exchanger.refreshFiles", "title": "Exchanger: Refresh", "icon": "$(refresh)" },
+      { "command": "exchanger.pullFile", "title": "Забрать в проект", "icon": "$(cloud-download)" }
+    ],
+    "views": {
+      "explorer": [{ "id": "exchanger.files", "name": "Exchanger" }]
+    },
+    "viewsWelcome": [
+      {
+        "view": "exchanger.files",
+        "contents": "На сервере пусто.\nПеретащи сюда файл со страницы Exchanger — он ляжет в проект по своему пути.\n[Открыть страницу](command:exchanger.openWeb)"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        { "command": "exchanger.send", "group": "7_modification@9" },
+        { "command": "exchanger.pull", "when": "explorerResourceIsFolder", "group": "7_modification@10" }
+      ],
+      "editor/title/context": [
+        { "command": "exchanger.send", "when": "resourceScheme == file", "group": "9_exchanger" }
+      ],
+      "editor/context": [
+        { "command": "exchanger.send", "when": "resourceScheme == file", "group": "9_exchanger" }
+      ],
+      "view/title": [
+        { "command": "exchanger.refreshFiles", "when": "view == exchanger.files", "group": "navigation@1" },
+        { "command": "exchanger.openWeb", "when": "view == exchanger.files", "group": "navigation@2" }
+      ],
+      "view/item/context": [
+        { "command": "exchanger.pullFile", "when": "view == exchanger.files && viewItem == exchangerFile", "group": "inline" },
+        { "command": "exchanger.pullFile", "when": "view == exchanger.files && viewItem == exchangerFile" }
+      ],
+      "commandPalette": [
+        { "command": "exchanger.pullFile", "when": "false" }
+      ]
+    },
+    "configuration": {
+      "title": "Exchanger",
+      "properties": {
+        "exchanger.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:3000",
+          "description": "Адрес сервера Exchanger, например http://192.168.1.10:3500"
+        },
+        "exchanger.deleteAfterPull": {
+          "type": "boolean",
+          "default": false,
+          "description": "Удалять файлы с сервера после того, как забрал их"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "bunx @vscode/vsce package --no-dependencies --allow-missing-repository --skip-license"
+  }
+}

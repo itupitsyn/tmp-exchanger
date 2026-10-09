@@ -1,0 +1,15 @@
+services:
+  exchanger:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    image: exchanger
+    restart: unless-stopped
+    ports:
+      - "3500:3000"
+    volumes:
+      # Файлы обменника. Именованный том — владельца каталога Docker выставит сам.
+      - exchanger-data:/data
+
+volumes:
+  exchanger-data:
