@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { CopyIcon, DownloadIcon, Trash2Icon, UploadIcon } from "lucide-react";
+import { CopyIcon, DownloadIcon, PlugIcon, PlugZapIcon, Trash2Icon, UploadIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ExtensionInstall } from "@/components/extension-install";
@@ -199,6 +199,12 @@ export function FileExchanger() {
   const [prefix, setPrefix] = useState("");
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Знакома ли страница с VS Code на этой машине; localStorage читаем только на клиенте.
+  const [paired, setPaired] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setPaired(Boolean(loadClient())), 0);
+    return () => clearTimeout(t);
+  }, []);
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -241,6 +247,34 @@ export function FileExchanger() {
     [prefix, refresh],
   );
 
+  /**
+   * Знакомство с расширением через vscode://. Вызывать только из обработчика клика:
+   * без жеста пользователя Chrome ссылку не откроет.
+   */
+  const connect = useCallback(async () => {
+    const pairId = randomId();
+    // Синхронно, до любых await — иначе жест «протухнет».
+    // server — чтобы свежеустановленное расширение само узнало адрес сервера.
+    window.location.href = `vscode://local.exchanger/pair?id=${pairId}&server=${encodeURIComponent(
+      location.origin,
+    )}`;
+    const id = toast.loading("Подключаю VS Code…", {
+      description: "Разреши браузеру открыть VS Code и подтверди подключение в VS Code.",
+    });
+    const client = await waitPair(pairId);
+    if (!client) {
+      toast.error("VS Code не ответил", {
+        id,
+        description: "Проверь, что стоит расширение Exchanger 0.5.0 (блок внизу страницы).",
+      });
+      return false;
+    }
+    saveClient(client);
+    setPaired(true);
+    toast.success("VS Code подключён", { id });
+    return true;
+  }, []);
+
   const sendFromVsCode = useCallback(
     async function send(paths: string[], justPaired = false) {
       const id = toast.loading("Передаю в VS Code…");
@@ -255,34 +289,28 @@ export function FileExchanger() {
 
       if (!result) {
         saveClient(null);
+        setPaired(false);
         if (justPaired) {
           toast.error("VS Code подключился, но не ответил на запрос", { id });
           return;
         }
-        // Расширение на этой машине ещё не знакомо странице (или не запущено) — знакомимся
-        // через vscode://. Без клика Chrome открывает такую ссылку только раз за загрузку
-        // страницы, поэтому если ответа нет — просим обновить страницу.
-        const pairId = randomId();
-        // server — чтобы свежеустановленное расширение само узнало адрес сервера.
-        window.location.href = `vscode://local.exchanger/pair?id=${pairId}&server=${encodeURIComponent(
-          location.origin,
-        )}`;
-        toast.loading("Подключаю VS Code…", {
+        // Расширение на этой машине ещё не знакомо странице (или не запущено).
+        // Ссылку vscode:// Chrome открывает только по клику, а drop кликом не считается.
+        toast.info("Подключи VS Code", {
           id,
-          description: "Если браузер спросит, разреши открыть VS Code.",
+          duration: Infinity,
+          description: client
+            ? "VS Code не ответил — подключи заново."
+            : "Один раз для этого браузера: Chrome спросит, можно ли открыть VS Code.",
+          action: {
+            label: "Подключить",
+            onClick: () => {
+              connect().then((ok) => {
+                if (ok) send(paths, true);
+              });
+            },
+          },
         });
-        const paired = await waitPair(pairId);
-        if (!paired) {
-          toast.error("VS Code не ответил", {
-            id,
-            description:
-              "Обнови страницу и перетащи ещё раз. Проверь, что стоит расширение Exchanger 0.5.0 и в нём указан этот сервер.",
-          });
-          return;
-        }
-        saveClient(paired);
-        toast.dismiss(id);
-        send(paths, true);
         return;
       }
       await refresh();
@@ -300,7 +328,7 @@ export function FileExchanger() {
         toast.success(`Загружено: ${result.sent.length}`, { id });
       }
     },
-    [refresh],
+    [refresh, connect],
   );
 
   useEffect(() => {
@@ -379,6 +407,15 @@ export function FileExchanger() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {paired ? (
+            <Button variant="ghost" title="Подключить заново" onClick={() => connect()}>
+              <PlugZapIcon className="text-green-600 dark:text-green-500" /> VS Code подключён
+            </Button>
+          ) : (
+            <Button variant="outline" onClick={() => connect()}>
+              <PlugIcon /> Подключить VS Code
+            </Button>
+          )}
           <Button variant="destructive" onClick={removeAll} disabled={!files?.length}>
             <Trash2Icon /> Очистить всё
           </Button>
