@@ -155,11 +155,10 @@ function registerDropIn({ api, serverUrl, pullFiles, uploadUris, formatSize }) {
       const item = new vscode.TreeItem(f.name);
       const dir = f.path.slice(0, -f.name.length);
       item.description = dir || "/";
-      item.tooltip = `${f.path}\n${formatSize(f.size)} · ${new Date(f.mtime).toLocaleString()}\nКлик — забрать в проект`;
+      item.tooltip = `${f.path}\n${formatSize(f.size)} · ${new Date(f.mtime).toLocaleString()}`;
       // resourceUri даёт иконку по расширению файла из текущей темы иконок.
       item.resourceUri = vscode.Uri.parse(`exchanger:/${f.path}`);
       item.contextValue = "exchangerFile";
-      item.command = { command: "exchanger.pullFile", title: "Забрать", arguments: [f] };
       return item;
     },
   };
