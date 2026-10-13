@@ -1,8 +1,11 @@
 import type { NextRequest } from "next/server";
 import { normalizeRelPath, openFile } from "@/lib/storage";
+import { deny } from "@/lib/auth";
 
 /** GET /api/files/raw?path=src/foo.ts — скачать файл. */
 export async function GET(request: NextRequest) {
+  const denied = deny(request);
+  if (denied) return denied;
   const relPath = normalizeRelPath(request.nextUrl.searchParams.get("path"));
   if (!relPath) return Response.json({ error: "invalid path" }, { status: 400 });
 

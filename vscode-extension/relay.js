@@ -54,10 +54,10 @@ async function sendFromPaths(paths, uploadUris) {
 
 /**
  * @param {vscode.ExtensionContext} context
- * @param {{ api: ApiFn, uploadUris: UploadFn }} deps
+ * @param {{ api: ApiFn, uploadUris: UploadFn, setKey: (server: string, key: string | undefined) => Promise<void> }} deps
  * @returns {vscode.Disposable[]}
  */
-function startRelay(context, { api, uploadUris }) {
+function startRelay(context, { api, uploadUris, setKey }) {
   const client = getClientId(context);
   let stopped = false;
   /** @type {AbortController | undefined} */
@@ -144,14 +144,24 @@ function startRelay(context, { api, uploadUris }) {
     return true;
   }
 
-  // vscode://local.exchanger/pair?id=<pairId>&server=<origin> — только знакомство; сами пути
+  // vscode://local.exchanger/pair?id=<pairId>&server=<origin>[&key=<ключ>] — только знакомство; сами пути
   // страница потом шлёт через /api/relay, и их получат все окна VS Code на этой машине.
   const uriHandler = vscode.window.registerUriHandler({
     async handleUri(uri) {
       const query = new URLSearchParams(uri.query);
       const pairId = query.get("id");
       if (uri.path !== "/pair" || !pairId) return;
-      if (!(await adoptServer(query.get("server")))) return;
+      const server = query.get("server");
+      if (!(await adoptServer(server))) return;
+      const key = query.get("key");
+      if (server && key) {
+        // Ключ доступа к серверу с паролем. С новым ключом сразу переподключаемся,
+        // не дожидаясь конца паузы после отказа.
+        await setKey(server, key);
+        restarting = true;
+        current?.abort();
+        wake();
+      }
       try {
         await post("relay/pair", { pairId, client });
       } catch (e) {

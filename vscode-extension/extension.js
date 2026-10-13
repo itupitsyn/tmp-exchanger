@@ -22,13 +22,35 @@ function apiUrl(endpoint, params = {}) {
   return url.toString();
 }
 
+/** @type {vscode.SecretStorage | undefined} */
+let secrets;
+
+/** Ключи доступа храним по одному на сервер. */
+function keyName(/** @type {string} */ server) {
+  return `exchanger.key:${new URL(server).origin}`;
+}
+
+/** @param {string} server @param {string | undefined} key */
+async function setKey(server, key) {
+  if (key) await secrets?.store(keyName(server), key);
+  else await secrets?.delete(keyName(server));
+}
+
 /** @param {string} endpoint @param {Record<string, string>} params @param {RequestInit} [init] */
 async function api(endpoint, params, init) {
   let res;
   try {
-    res = await fetch(apiUrl(endpoint, params), init);
+    const key = await secrets?.get(keyName(serverUrl()));
+    const headers = new Headers(init?.headers);
+    if (key) headers.set("Authorization", `Bearer ${key}`);
+    res = await fetch(apiUrl(endpoint, params), { ...init, headers });
   } catch (e) {
     throw new Error(`Сервер ${serverUrl()} недоступен: ${e instanceof Error ? e.message : e}`);
+  }
+  if (res.status === 401) {
+    throw new Error(
+      `Сервер ${serverUrl()} требует пароль: нажми «Подключить VS Code» на его странице или выполни команду «Exchanger: Set Password»`,
+    );
   }
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res;
@@ -270,7 +292,19 @@ async function pullFiles(root, files) {
 
 /** @param {vscode.ExtensionContext} context */
 function activate(context) {
+  secrets = context.secrets;
   context.subscriptions.push(
+    vscode.commands.registerCommand("exchanger.setPassword", async () => {
+      const value = await vscode.window.showInputBox({
+        title: `Exchanger: пароль для ${serverUrl()}`,
+        prompt: "Пустое значение — забыть пароль",
+        password: true,
+        ignoreFocusOut: true,
+      });
+      if (value === undefined) return;
+      await setKey(serverUrl(), value || undefined);
+      await vscode.commands.executeCommand("exchanger.refreshFiles");
+    }),
     vscode.commands.registerCommand("exchanger.send", (uri, uris) =>
       send(uri instanceof vscode.Uri ? uri : undefined, Array.isArray(uris) ? uris : undefined),
     ),
@@ -280,7 +314,7 @@ function activate(context) {
     vscode.commands.registerCommand("exchanger.openWeb", () =>
       vscode.env.openExternal(vscode.Uri.parse(serverUrl())),
     ),
-    ...startRelay(context, { api, uploadUris }),
+    ...startRelay(context, { api, uploadUris, setKey }),
     ...registerDropIn({ api, serverUrl, pullFiles, uploadUris, formatSize }),
   );
 }

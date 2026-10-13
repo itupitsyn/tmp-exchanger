@@ -7,6 +7,9 @@ services:
     restart: unless-stopped
     ports:
       - "3500:3000"
+    environment:
+      # Пароль на вход. Берётся из окружения или из .env рядом с этим файлом; пустой — без авторизации.
+      EXCHANGER_PASSWORD: ${EXCHANGER_PASSWORD:-}
     volumes:
       # Файлы обменника. Именованный том — владельца каталога Docker выставит сам.
       - exchanger-data:/data

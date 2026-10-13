@@ -1,10 +1,13 @@
 import type { NextRequest } from "next/server";
 import { addResult, getResults } from "@/lib/relay";
+import { deny } from "@/lib/auth";
 
 const strings = (v: unknown) => (Array.isArray(v) ? v.filter((s) => typeof s === "string") : []);
 
 /** POST /api/relay/result { id, sent, failed, skipped } — отчёт окна VS Code. */
 export async function POST(request: NextRequest) {
+  const denied = deny(request);
+  if (denied) return denied;
   const body = await request.json().catch(() => null);
   const id = Number(body?.id);
   if (!Number.isInteger(id)) return Response.json({ error: "bad id" }, { status: 400 });
@@ -19,6 +22,8 @@ export async function POST(request: NextRequest) {
 
 /** GET /api/relay/result?id=N — отчёты всех окон VS Code по запросу. */
 export async function GET(request: NextRequest) {
+  const denied = deny(request);
+  if (denied) return denied;
   const id = Number(request.nextUrl.searchParams.get("id"));
   if (!Number.isInteger(id)) return Response.json({ error: "bad id" }, { status: 400 });
   return Response.json({ results: getResults(id) });

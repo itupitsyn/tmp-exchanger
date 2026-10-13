@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { currentSeq, pushRequest, recentRequests, waitRequests } from "@/lib/relay";
+import { deny } from "@/lib/auth";
 
 const LONG_POLL_MS = 25_000;
 /** Страница ждёт подтверждения 4 с — всё, что моложе, ещё имеет смысл доставить. */
@@ -8,6 +9,8 @@ const MAX_PATHS = 1000;
 
 /** POST /api/relay { client, paths } — страница просит расширение отправить файлы. */
 export async function POST(request: NextRequest) {
+  const denied = deny(request);
+  if (denied) return denied;
   const body = await request.json().catch(() => null);
   const client = body?.client;
   const paths = body?.paths;
@@ -31,6 +34,8 @@ export async function POST(request: NextRequest) {
  * за последние секунды — те, что страница успела отправить, пока расширение было не на связи.
  */
 export async function GET(request: NextRequest) {
+  const denied = deny(request);
+  if (denied) return denied;
   const params = request.nextUrl.searchParams;
   const client = params.get("client");
   if (!client) return Response.json({ error: "client required" }, { status: 400 });

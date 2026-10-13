@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   CopyIcon,
   DownloadIcon,
   LoaderCircleIcon,
+  LogOutIcon,
   PlugIcon,
   PlugZapIcon,
   Trash2Icon,
@@ -205,6 +207,7 @@ async function waitPair(pairId: string) {
 }
 
 export function FileExchanger() {
+  const router = useRouter();
   const [files, setFiles] = useState<StoredFile[] | null>(null);
   const [prefix, setPrefix] = useState("");
   const [dragging, setDragging] = useState(false);
@@ -215,6 +218,19 @@ export function FileExchanger() {
     const t = setTimeout(() => setPaired(Boolean(loadClient())), 0);
     return () => clearTimeout(t);
   }, []);
+  // Ключ доступа для расширения. Берём заранее: в обработчике клика ждать ответа сервера нельзя.
+  const authKey = useRef<string | null>(null);
+  // Включён ли на сервере пароль — тогда показываем «Выйти».
+  const [authOn, setAuthOn] = useState(false);
+  useEffect(() => {
+    fetch("/api/auth", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        authKey.current = data?.key ?? null;
+        setAuthOn(Boolean(data?.key));
+      })
+      .catch(() => {});
+  }, []);
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -222,10 +238,12 @@ export function FileExchanger() {
     try {
       const res = await fetch("/api/files", { cache: "no-store" });
       if (res.ok) setFiles((await res.json()).files);
+      // Сессия кончилась или пароль сменили.
+      else if (res.status === 401) router.replace("/login");
     } catch {
       // сервер недоступен — попробуем на следующем тике
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     const first = setTimeout(refresh, 0);
@@ -277,10 +295,10 @@ export function FileExchanger() {
   const connect = useCallback(async () => {
     const pairId = randomId();
     // Синхронно, до любых await — иначе жест «протухнет».
-    // server — чтобы свежеустановленное расширение само узнало адрес сервера.
+    // server и key — чтобы свежеустановленное расширение само узнало адрес сервера и ключ доступа.
     window.location.href = `vscode://local.exchanger/pair?id=${pairId}&server=${encodeURIComponent(
       location.origin,
-    )}`;
+    )}${authKey.current ? `&key=${authKey.current}` : ""}`;
     const id = toast.loading("Подключаю VS Code…", {
       description: "Разреши браузеру открыть VS Code и подтверди подключение в VS Code.",
     });
@@ -424,6 +442,11 @@ export function FileExchanger() {
     refresh();
   }
 
+  async function logout() {
+    await fetch("/api/auth", { method: "DELETE" }).catch(() => null);
+    router.replace("/login");
+  }
+
   async function copyPath(path: string) {
     try {
       await copyText(path);
@@ -456,6 +479,11 @@ export function FileExchanger() {
           <Button variant="destructive" onClick={removeAll} disabled={!files?.length}>
             <Trash2Icon /> Очистить всё
           </Button>
+          {authOn && (
+            <Button variant="ghost" onClick={logout}>
+              <LogOutIcon /> Выйти
+            </Button>
+          )}
         </div>
       </header>
 
