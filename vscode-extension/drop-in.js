@@ -3,6 +3,7 @@
 // Строка таблицы на странице несёт свой тип данных MIME = { server, files: [{ path }] }.
 // Принимаем его в двух местах: в редакторе (Shift + отпустить) и в панели «Exchanger» в Explorer.
 // Файлы скачиваются с настроенного сервера и кладутся в проект по своим относительным путям.
+// В обратную сторону: файлы из Explorer, брошенные в панель, отправляются на сервер.
 const vscode = require("vscode");
 
 const MIME = "application/vnd.exchanger.file+json";
@@ -15,6 +16,7 @@ const REFRESH_MS = 5000;
  *   api: (endpoint: string, params: Record<string, string>, init?: RequestInit) => Promise<Response>,
  *   serverUrl: () => string,
  *   pullFiles: (root: vscode.Uri, files: { path: string }[]) => Promise<void>,
+ *   uploadUris: (targets: vscode.Uri[]) => Promise<{ sent: string[], failed: string[] }>,
  *   formatSize: (bytes: number) => string,
  * }} Deps
  */
@@ -23,7 +25,7 @@ const REFRESH_MS = 5000;
  * @param {Deps} deps
  * @returns {vscode.Disposable[]}
  */
-function registerDropIn({ api, serverUrl, pullFiles, formatSize }) {
+function registerDropIn({ api, serverUrl, pullFiles, uploadUris, formatSize }) {
   const out = vscode.window.createOutputChannel("Exchanger");
 
   /** Список типов в DataTransfer — для диагностики, что вообще пришло из браузера. */
@@ -67,6 +69,24 @@ function registerDropIn({ api, serverUrl, pullFiles, formatSize }) {
       : [];
     out.appendLine(`  файлы: ${files.map((f) => f.path).join(", ")}`);
     return files.length ? files : null;
+  }
+
+  /** Файлы и папки, перетащенные из Explorer или с вкладки редактора. */
+  async function readUris(/** @type {vscode.DataTransfer} */ dt) {
+    const item = dt.get("text/uri-list");
+    if (!item) return [];
+    /** @type {vscode.Uri[]} */
+    const uris = [];
+    for (const line of (await item.asString()).split(/\r?\n/)) {
+      if (!line || line.startsWith("#")) continue;
+      try {
+        const uri = vscode.Uri.parse(line, true);
+        if (uri.scheme !== "http" && uri.scheme !== "https") uris.push(uri);
+      } catch {
+        // не URI — пропускаем
+      }
+    }
+    return uris;
   }
 
   async function rootFor(/** @type {vscode.Uri | undefined} */ uri) {
@@ -152,10 +172,23 @@ function registerDropIn({ api, serverUrl, pullFiles, formatSize }) {
       dragMimeTypes: [],
       async handleDrop(_target, dataTransfer) {
         logTypes("панель Exchanger", dataTransfer);
-        const dropped = await readPayload(dataTransfer);
-        if (!dropped) return;
-        const root = await rootFor(undefined);
-        if (root) await pullFiles(root, dropped);
+        // Строка со страницы — забираем в проект; файлы из Explorer или вкладки — отправляем на сервер.
+        if (dataTransfer.get(MIME)) {
+          const dropped = await readPayload(dataTransfer);
+          if (!dropped) return;
+          const root = await rootFor(undefined);
+          if (root) await pullFiles(root, dropped);
+          return;
+        }
+        const uris = await readUris(dataTransfer);
+        if (!uris.length) return;
+        out.appendLine(`  отправка: ${uris.map((u) => u.fsPath).join(", ")}`);
+        try {
+          await uploadUris(uris);
+        } catch (e) {
+          vscode.window.showErrorMessage(`Exchanger: ${e instanceof Error ? e.message : e}`);
+        }
+        await load();
       },
     },
   });

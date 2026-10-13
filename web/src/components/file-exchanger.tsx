@@ -2,7 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { CopyIcon, DownloadIcon, PlugIcon, PlugZapIcon, Trash2Icon, UploadIcon } from "lucide-react";
+import {
+  CopyIcon,
+  DownloadIcon,
+  LoaderCircleIcon,
+  PlugIcon,
+  PlugZapIcon,
+  Trash2Icon,
+  UploadIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ExtensionInstall } from "@/components/extension-install";
@@ -18,6 +26,8 @@ import {
 
 type StoredFile = { path: string; name: string; size: number; mtime: string };
 type Upload = { path: string; file: File };
+/** Файл, который ещё летит на сервер: строка со спиннером в таблице. path известен не всегда. */
+type Pending = { id: string; name: string; dir: string; path?: string };
 
 const POLL_MS = 3000;
 /** Тип данных при перетаскивании строки в VS Code (см. vscode-extension/drop-in.js). */
@@ -198,7 +208,7 @@ export function FileExchanger() {
   const [files, setFiles] = useState<StoredFile[] | null>(null);
   const [prefix, setPrefix] = useState("");
   const [dragging, setDragging] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<Pending[]>([]);
   // Знакома ли страница с VS Code на этой машине; localStorage читаем только на клиенте.
   const [paired, setPaired] = useState(false);
   useEffect(() => {
@@ -229,18 +239,31 @@ export function FileExchanger() {
   const upload = useCallback(
     async (uploads: Upload[]) => {
       if (!uploads.length) return;
-      setBusy(true);
+      const batch = uploads.map(({ path, file }) => ({
+        id: randomId(),
+        target: joinPath(prefix, path),
+        file,
+      }));
+      setPending((p) => [
+        ...p,
+        ...batch.map(({ id, target }) => ({
+          id,
+          name: target.split("/").pop() || target,
+          dir: dirOf(target) || "/",
+          path: target,
+        })),
+      ]);
       let failed = 0;
-      for (const { path, file } of uploads) {
-        const target = joinPath(prefix, path);
+      for (const { id, target, file } of batch) {
         const res = await fetch(`/api/files?path=${encodeURIComponent(target)}`, {
           method: "PUT",
           body: file,
         }).catch(() => null);
         if (!res?.ok) failed++;
+        // Сначала обновляем список, потом убираем спиннер — чтобы строка не моргала.
+        await refresh();
+        setPending((p) => p.filter((x) => x.id !== id));
       }
-      setBusy(false);
-      await refresh();
       if (failed) toast.error(`Не загрузилось: ${failed} из ${uploads.length}`);
       else toast.success(`Загружено: ${uploads.length}`);
     },
@@ -265,7 +288,7 @@ export function FileExchanger() {
     if (!client) {
       toast.error("VS Code не ответил", {
         id,
-        description: "Проверь, что стоит расширение Exchanger 0.5.1 (блок внизу страницы).",
+        description: "Проверь, что стоит свежее расширение Exchanger (блок внизу страницы).",
       });
       return false;
     }
@@ -279,12 +302,27 @@ export function FileExchanger() {
     async function send(paths: string[], justPaired = false) {
       const id = toast.loading("Передаю в VS Code…");
       const client = loadClient();
+      // Относительных путей страница не знает — их вычислит расширение; показываем имена.
+      const rows = paths.map((p) => {
+        const last = p.split(/[\\/]/).filter(Boolean).pop() || p;
+        let name = last;
+        try {
+          if (p.startsWith("file:")) name = decodeURIComponent(last);
+        } catch {
+          // оставляем как есть
+        }
+        return { id: randomId(), name, dir: "из VS Code…" };
+      });
+      if (client) setPending((p) => [...p, ...rows]);
       let result;
       try {
         result = client ? await sendViaRelay(client, paths) : null;
+        if (result) await refresh();
       } catch (e) {
         toast.error("Не удалось передать в VS Code", { id, description: String(e) });
         return;
+      } finally {
+        setPending((p) => p.filter((x) => !rows.some((r) => r.id === x.id)));
       }
 
       if (!result) {
@@ -313,7 +351,6 @@ export function FileExchanger() {
         });
         return;
       }
-      await refresh();
       if (result.skipped.length) {
         toast.error(`Не в открытом проекте VS Code: ${result.skipped.length}`, {
           id,
@@ -438,8 +475,8 @@ export function FileExchanger() {
             placeholder="Папка назначения, например src/utils (необязательно)"
             className="flex-1 font-mono text-xs"
           />
-          <Button variant="outline" disabled={busy} onClick={() => fileInput.current?.click()}>
-            {busy ? "Загрузка…" : "Выбрать файлы"}
+          <Button variant="outline" onClick={() => fileInput.current?.click()}>
+            Выбрать файлы
           </Button>
           <input
             ref={fileInput}
@@ -467,7 +504,26 @@ export function FileExchanger() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {files === null ? (
+            {pending.map((p) => (
+              <TableRow key={p.id} className="text-muted-foreground">
+                <TableCell className="font-medium">
+                  <span className="flex items-center gap-2">
+                    <LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
+                    {p.name}
+                  </span>
+                </TableCell>
+                <TableCell className="font-mono text-xs">{p.dir}</TableCell>
+                <TableCell colSpan={3} className="text-right">
+                  Загружается…
+                </TableCell>
+              </TableRow>
+            ))}
+            {pending.length ? (
+              // Перезаписываемый файл показываем только строкой со спиннером.
+              files
+                ?.filter((f) => !pending.some((p) => p.path === f.path))
+                .map(renderFile)
+            ) : files === null ? (
               <TableRow>
                 <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
                   Загрузка…
@@ -480,7 +536,18 @@ export function FileExchanger() {
                 </TableCell>
               </TableRow>
             ) : (
-              files.map((f) => (
+              files.map(renderFile)
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      <ExtensionInstall />
+    </div>
+  );
+
+  function renderFile(f: StoredFile) {
+    return (
                 <TableRow
                   key={f.path}
                   draggable
@@ -534,13 +601,6 @@ export function FileExchanger() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
-
-      <ExtensionInstall />
-    </div>
-  );
+    );
+  }
 }

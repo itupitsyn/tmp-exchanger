@@ -281,7 +281,7 @@ function activate(context) {
       vscode.env.openExternal(vscode.Uri.parse(serverUrl())),
     ),
     ...startRelay(context, { api, uploadUris }),
-    ...registerDropIn({ api, serverUrl, pullFiles, formatSize }),
+    ...registerDropIn({ api, serverUrl, pullFiles, uploadUris, formatSize }),
   );
 }
 

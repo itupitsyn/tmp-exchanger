@@ -33,13 +33,14 @@ bun run dev          # http://localhost:3000, слушает все интерф
 
 ```sh
 cd vscode-extension
-bun run package      # → exchanger-0.4.0.vsix
-code --install-extension exchanger-0.4.0.vsix
+bun run package      # → exchanger-<версия>.vsix
+code --install-extension exchanger-<версия>.vsix
 ```
 
 Настройка `exchanger.serverUrl` — адрес сервера, например `http://192.168.1.133:3500`. Задавать руками не обязательно: при первом перетаскивании страница передаёт свой адрес, и расширение после подтверждения сохраняет его само.
 
 - **Exchanger: Send** — ПКМ по файлам/папкам в Explorer, по вкладке или в редакторе. Путь берётся относительно корня workspace; несохранённые изменения тоже уходят.
+- **Панель «Exchanger» в Explorer** — брось в неё файлы или папки из Explorer (или вкладку редактора), и они уйдут на сервер. Кнопка ☁ в заголовке забирает всё с сервера в проект.
 - **Exchanger: Pull** — из палитры команд (кладёт в корень workspace) или ПКМ по папке (кладёт относительно неё). Перед перезаписью спрашивает.
 - `exchanger.deleteAfterPull` — удалять с сервера то, что забрал.
 
