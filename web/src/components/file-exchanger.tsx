@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
+  ClipboardCopyIcon,
+  ClipboardPasteIcon,
   CopyIcon,
   DownloadIcon,
   LoaderCircleIcon,
@@ -16,7 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ExtensionInstall } from "@/components/extension-install";
-import { copyText } from "@/lib/clipboard";
+import { clipboardKind, copyFileContent, copyText, readClipboard } from "@/lib/clipboard";
 import {
   Table,
   TableBody,
@@ -133,6 +135,48 @@ async function collectDropped(dt: DataTransfer): Promise<Upload[]> {
   }
   for (const entry of entries) await walk(entry);
   return result;
+}
+
+const MIME_EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/bmp": "bmp",
+  "text/plain": "txt",
+};
+
+/** Имя для вставленного из буфера: clipboard-2026-10-14-153012.png */
+function clipboardName(type: string) {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  return `clipboard-${stamp}.${MIME_EXT[type] ?? "bin"}`;
+}
+
+/**
+ * Что вставили из буфера. Скриншот приходит файлом «image.png» — даём ему имя со временем;
+ * скопированные в проводнике файлы сохраняют свои имена; иначе берём текст.
+ */
+function fromClipboard(dt: DataTransfer): Upload[] {
+  const files = [...dt.files];
+  if (files.length) {
+    return files.map((file) => ({
+      path: /^image\.\w+$/.test(file.name) || !file.name ? clipboardName(file.type) : file.name,
+      file,
+    }));
+  }
+  const text = dt.getData("text/plain");
+  if (!text) return [];
+  return [{ path: clipboardName("text/plain"), file: new File([text], "text", { type: "text/plain" }) }];
+}
+
+/** Ctrl+V в поле ввода — обычная вставка текста, не загрузка. */
+function isEditable(target: EventTarget | null) {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA")
+  );
 }
 
 /** Абсолютные пути файлов, перетащенных из VS Code (содержимого браузер не получает). */
@@ -419,11 +463,20 @@ export function FileExchanger() {
       const paths = vsCodePaths(dt);
       if (paths.length) sendFromVsCode(paths);
     };
+    const onPaste = (e: ClipboardEvent) => {
+      if (isEditable(e.target) || !e.clipboardData) return;
+      const uploads = fromClipboard(e.clipboardData);
+      if (!uploads.length) return;
+      e.preventDefault();
+      upload(uploads);
+    };
+    window.addEventListener("paste", onPaste);
     window.addEventListener("dragenter", onEnter);
     window.addEventListener("dragover", onOver);
     window.addEventListener("dragleave", onLeave);
     window.addEventListener("drop", onDrop);
     return () => {
+      window.removeEventListener("paste", onPaste);
       window.removeEventListener("dragenter", onEnter);
       window.removeEventListener("dragover", onOver);
       window.removeEventListener("dragleave", onLeave);
@@ -445,6 +498,31 @@ export function FileExchanger() {
   async function logout() {
     await fetch("/api/auth", { method: "DELETE" }).catch(() => null);
     router.replace("/login");
+  }
+
+  async function pasteButton() {
+    let file: File | null = null;
+    try {
+      file = await readClipboard();
+    } catch {
+      // нет разрешения или буфер недоступен
+    }
+    if (!file) {
+      toast.info("Нажми Ctrl+V на странице", {
+        description: "Кнопкой браузер даёт читать буфер только по https и с разрешения.",
+      });
+      return;
+    }
+    upload([{ path: clipboardName(file.type), file }]);
+  }
+
+  async function copyContent(f: StoredFile, kind: "image" | "text") {
+    try {
+      await copyFileContent(rawUrl(f.path), kind);
+      toast.success(kind === "image" ? "Картинка скопирована" : "Текст скопирован");
+    } catch (e) {
+      toast.error("Не удалось скопировать", { description: e instanceof Error ? e.message : String(e) });
+    }
   }
 
   async function copyPath(path: string) {
@@ -495,6 +573,7 @@ export function FileExchanger() {
         <UploadIcon className="size-8 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">
           Перетащи файлы или папки из VS Code или проводника в любое место страницы
+          или вставь текст или картинку из буфера (Ctrl+V)
         </p>
         <div className="flex w-full max-w-md flex-wrap items-center justify-center gap-2">
           <Input
@@ -505,6 +584,9 @@ export function FileExchanger() {
           />
           <Button variant="outline" onClick={() => fileInput.current?.click()}>
             Выбрать файлы
+          </Button>
+          <Button variant="outline" onClick={pasteButton}>
+            <ClipboardPasteIcon /> Из буфера
           </Button>
           <input
             ref={fileInput}
@@ -575,6 +657,7 @@ export function FileExchanger() {
   );
 
   function renderFile(f: StoredFile) {
+    const kind = clipboardKind(f.name, f.size);
     return (
                 <TableRow
                   key={f.path}
@@ -601,6 +684,16 @@ export function FileExchanger() {
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
+                      {kind && (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          title={kind === "image" ? "Копировать картинку в буфер" : "Копировать текст в буфер"}
+                          onClick={() => copyContent(f, kind)}
+                        >
+                          <ClipboardCopyIcon />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon-sm"
