@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ExtensionInstall } from "@/components/extension-install";
+import { Truncated } from "@/components/truncated";
 import { clipboardKind, copyFileContent, copyText, readClipboard } from "@/lib/clipboard";
 import {
   Table,
@@ -606,8 +607,9 @@ export function FileExchanger() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Файл</TableHead>
-              <TableHead>Путь</TableHead>
+              {/* Имя и путь делят свободное место и обрезаются, чтобы кнопки справа всегда были видны. */}
+              <TableHead className="w-1/2">Файл</TableHead>
+              <TableHead className="w-1/2">Путь</TableHead>
               <TableHead className="text-right">Размер</TableHead>
               <TableHead className="text-right">Когда</TableHead>
               <TableHead className="w-0" />
@@ -616,13 +618,15 @@ export function FileExchanger() {
           <TableBody>
             {pending.map((p) => (
               <TableRow key={p.id} className="text-muted-foreground">
-                <TableCell className="font-medium">
+                <TableCell className="max-w-0 font-medium">
                   <span className="flex items-center gap-2">
                     <LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
-                    {p.name}
+                    <Truncated className="min-w-0">{p.name}</Truncated>
                   </span>
                 </TableCell>
-                <TableCell className="font-mono text-xs">{p.dir}</TableCell>
+                <TableCell className="max-w-0 font-mono text-xs">
+                  <Truncated tooltipClassName="font-mono">{p.dir}</Truncated>
+                </TableCell>
                 <TableCell colSpan={3} className="text-right">
                   Загружается…
                 </TableCell>
@@ -674,9 +678,18 @@ export function FileExchanger() {
                     );
                   }}
                 >
-                  <TableCell className="font-medium">{f.name}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">
-                    {dirOf(f.path) || "/"}
+                  <TableCell className="max-w-0 font-medium">
+                    <Truncated>{f.name}</Truncated>
+                  </TableCell>
+                  <TableCell className="max-w-0 font-mono text-xs text-muted-foreground">
+                    {/* Путь обрезаем слева: конец пути (ближайшие папки) важнее начала. */}
+                    <Truncated
+                      className="[direction:rtl] text-left"
+                      tooltipClassName="font-mono"
+                      full={f.path}
+                    >
+                      <bdi>{dirOf(f.path) || "/"}</bdi>
+                    </Truncated>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{formatSize(f.size)}</TableCell>
                   <TableCell className="text-right text-muted-foreground">
