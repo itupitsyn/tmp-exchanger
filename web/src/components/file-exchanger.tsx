@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ExtensionInstall } from "@/components/extension-install";
 import { Truncated } from "@/components/truncated";
+import { uploadChunked } from "@/lib/chunked-upload";
 import { clipboardKind, copyFileContent, copyText, readClipboard } from "@/lib/clipboard";
 import {
   Table,
@@ -32,7 +33,7 @@ import {
 type StoredFile = { path: string; name: string; size: number; mtime: string };
 type Upload = { path: string; file: File };
 /** Файл, который ещё летит на сервер: строка со спиннером в таблице. path известен не всегда. */
-type Pending = { id: string; name: string; dir: string; path?: string };
+type Pending = { id: string; name: string; dir: string; path?: string; progress?: number };
 
 const POLL_MS = 3000;
 /** Тип данных при перетаскивании строки в VS Code (см. vscode-extension/drop-in.js). */
@@ -314,15 +315,18 @@ export function FileExchanger() {
           name: target.split("/").pop() || target,
           dir: dirOf(target) || "/",
           path: target,
+          progress: 0,
         })),
       ]);
       let failed = 0;
       for (const { id, target, file } of batch) {
-        const res = await fetch(`/api/files?path=${encodeURIComponent(target)}`, {
-          method: "PUT",
-          body: file,
-        }).catch(() => null);
-        if (!res?.ok) failed++;
+        try {
+          await uploadChunked(target, file, (progress) =>
+            setPending((p) => p.map((x) => (x.id === id ? { ...x, progress } : x))),
+          );
+        } catch {
+          failed++;
+        }
         // Сначала обновляем список, потом убираем спиннер — чтобы строка не моргала.
         await refresh();
         setPending((p) => p.filter((x) => x.id !== id));
@@ -627,8 +631,22 @@ export function FileExchanger() {
                 <TableCell className="max-w-0 font-mono text-xs">
                   <Truncated tooltipClassName="font-mono">{p.dir}</Truncated>
                 </TableCell>
-                <TableCell colSpan={3} className="text-right">
-                  Загружается…
+                <TableCell colSpan={3}>
+                  {p.progress === undefined ? (
+                    <div className="text-right">Загружается…</div>
+                  ) : (
+                    <div className="flex items-center justify-end gap-2">
+                      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full bg-primary transition-[width]"
+                          style={{ width: `${Math.round(p.progress * 100)}%` }}
+                        />
+                      </div>
+                      <span className="w-10 text-right tabular-nums">
+                        {Math.floor(p.progress * 100)}%
+                      </span>
+                    </div>
+                  )}
                 </TableCell>
               </TableRow>
             ))}

@@ -1,5 +1,10 @@
 // @ts-check
 const vscode = require("vscode");
+const fs = require("node:fs/promises");
+const { randomBytes } = require("node:crypto");
+const { createWriteStream } = require("node:fs");
+const { Readable } = require("node:stream");
+const { pipeline } = require("node:stream/promises");
 const { startRelay } = require("./relay");
 const { registerDropIn } = require("./drop-in");
 
@@ -89,11 +94,95 @@ async function expandToFiles(/** @type {vscode.Uri[]} */ uris) {
   return [...files.values()];
 }
 
-/** Содержимое файла; для открытого несохранённого документа — текущий текст из редактора. */
-async function readContent(/** @type {vscode.Uri} */ uri) {
+/** Кусок меньше 100 МБ — лимита Cloudflare и типичных прокси. Как в web/src/lib/chunked-upload.ts. */
+const CHUNK_SIZE = 32 * 1024 * 1024;
+const CHUNK_RETRIES = 5;
+
+/**
+ * Источник содержимого: несохранённый документ — текст из редактора, локальный файл читается
+ * кусками с диска (4 ГБ в память не влезут), остальное (remote и т.п.) — целиком.
+ * @returns {Promise<{ size: number, read: (start: number, end: number) => Promise<Uint8Array> }>}
+ */
+async function openContent(/** @type {vscode.Uri} */ uri) {
   const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
-  if (doc?.isDirty) return new TextEncoder().encode(doc.getText());
-  return vscode.workspace.fs.readFile(uri);
+  if (!doc?.isDirty && uri.scheme === "file") {
+    const handle = await fs.open(uri.fsPath, "r");
+    const { size } = await handle.stat();
+    await handle.close();
+    return {
+      size,
+      async read(start, end) {
+        const h = await fs.open(uri.fsPath, "r");
+        try {
+          const buf = Buffer.alloc(end - start);
+          let done = 0;
+          while (done < buf.length) {
+            const { bytesRead } = await h.read(buf, done, buf.length - done, start + done);
+            if (!bytesRead) break;
+            done += bytesRead;
+          }
+          return buf.subarray(0, done);
+        } finally {
+          await h.close();
+        }
+      },
+    };
+  }
+  const data = doc?.isDirty ? new TextEncoder().encode(doc.getText()) : await vscode.workspace.fs.readFile(uri);
+  return { size: data.length, read: async (start, end) => data.subarray(start, end) };
+}
+
+/**
+ * Загружает файл кусками; после обрыва продолжает с того, что сервер уже принял.
+ * @param {vscode.Uri} uri @param {string} rel @param {(fraction: number) => void} onProgress
+ */
+async function uploadFile(uri, rel, onProgress) {
+  const content = await openContent(uri);
+  const id = randomBytes(16).toString("hex");
+  const total = content.size;
+  let offset = 0;
+  let attempt = 0;
+  /** @param {string} endpoint @param {Record<string, string>} params @param {RequestInit} init */
+  const call = async (endpoint, params, init) => {
+    try {
+      return { res: await api(endpoint, params, init) };
+    } catch (e) {
+      // 409 — кусок не с того места: сервер говорит, сколько у него есть.
+      const m = /^409 .*"size":(\d+)/.exec(e instanceof Error ? e.message : "");
+      if (m) return { size: Number(m[1]) };
+      throw e;
+    }
+  };
+  for (;;) {
+    try {
+      if (offset < total || offset === 0) {
+        const r = await call("files/chunk", { upload: id, offset: String(offset) }, {
+          method: "PUT",
+          body: await content.read(offset, Math.min(total, offset + CHUNK_SIZE)),
+        });
+        if (r.size !== undefined) {
+          offset = r.size;
+          continue;
+        }
+        offset = (await /** @type {Response} */ (r.res).json()).size;
+        attempt = 0;
+        onProgress(total ? offset / total : 1);
+        if (offset < total) continue;
+      }
+      const r = await call("files/chunk", { upload: id, path: rel, total: String(total) }, { method: "POST" });
+      if (r.size !== undefined) {
+        offset = r.size;
+        continue;
+      }
+      return;
+    } catch (e) {
+      // Ответ сервера с ошибкой (4xx/5xx в тексте) — не сеть; повторяем только сеть и 5xx.
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/^4\d\d /.test(msg) || msg.includes("требует пароль")) throw e;
+      if (++attempt > CHUNK_RETRIES) throw e;
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** (attempt - 1)));
+    }
+  }
 }
 
 /**
@@ -130,7 +219,13 @@ async function uploadUris(targets, { confirmLarge = true } = {}) {
         const rel = relativePath(uri);
         progress.report({ message: rel, increment: 100 / files.length });
         try {
-          await api("files", { path: rel }, { method: "PUT", body: await readContent(uri) });
+          let shown = -1;
+          await uploadFile(uri, rel, (fraction) => {
+            const pct = Math.floor(fraction * 100);
+            if (pct === shown || fraction >= 1) return;
+            shown = pct;
+            progress.report({ message: `${rel} — ${pct}%` });
+          });
           sent.push(rel);
         } catch (e) {
           failed.push(`${rel}: ${e instanceof Error ? e.message : e}`);
@@ -268,9 +363,16 @@ async function pullFiles(root, files) {
         progress.report({ message: file.path, increment: 100 / toWrite.length });
         try {
           const res = await api("files/raw", { path: file.path });
-          const data = new Uint8Array(await res.arrayBuffer());
           await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(target, ".."));
-          await vscode.workspace.fs.writeFile(target, data);
+          if (target.scheme === "file" && res.body) {
+            // Большие файлы пишем потоком, не собирая в памяти.
+            await pipeline(
+              Readable.fromWeb(/** @type {import("node:stream/web").ReadableStream} */ (res.body)),
+              createWriteStream(target.fsPath),
+            );
+          } else {
+            await vscode.workspace.fs.writeFile(target, new Uint8Array(await res.arrayBuffer()));
+          }
           written.push(target);
           if (deleteAfter) await api("files", { path: file.path }, { method: "DELETE" });
         } catch (e) {

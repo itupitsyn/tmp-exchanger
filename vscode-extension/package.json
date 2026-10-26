@@ -2,7 +2,7 @@
   "name": "exchanger",
   "displayName": "Exchanger",
   "description": "Отправка и получение файлов через Exchanger с сохранением путей относительно корня проекта",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "local",
   "license": "UNLICENSED",
   "engines": {

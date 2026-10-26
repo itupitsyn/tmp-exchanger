@@ -80,6 +80,72 @@ export async function saveFile(relPath: string, body: ReadableStream<Uint8Array>
   }
 }
 
+// Загрузка кусками: большие файлы через прокси одним запросом не пролезают (таймауты, лимиты).
+// Куски дописываются в tmp/up-<id>, в конце файл переименовывается на своё место.
+
+const UPLOAD_ID = /^[a-f0-9]{16,64}$/;
+/** Брошенные недогрузки старше суток удаляем. */
+const STALE_UPLOAD_MS = 24 * 60 * 60 * 1000;
+
+/** Кусок пришёл не с того места: клиент должен продолжить с size. */
+export class OffsetMismatch extends Error {
+  constructor(readonly size: number) {
+    super(`offset mismatch, have ${size}`);
+  }
+}
+
+function uploadTmp(id: string) {
+  if (!UPLOAD_ID.test(id)) throw new Error("bad upload id");
+  return path.join(TMP_DIR, `up-${id}`);
+}
+
+async function tmpSize(tmp: string) {
+  return fs.stat(tmp).then(
+    (s) => s.size,
+    () => 0,
+  );
+}
+
+async function pruneStaleUploads() {
+  const names = await fs.readdir(TMP_DIR).catch(() => []);
+  const now = Date.now();
+  await Promise.all(
+    names
+      .filter((n) => n.startsWith("up-"))
+      .map(async (n) => {
+        const p = path.join(TMP_DIR, n);
+        const stat = await fs.stat(p).catch(() => null);
+        if (stat && now - stat.mtimeMs > STALE_UPLOAD_MS) await fs.rm(p, { force: true });
+      }),
+  );
+}
+
+/** Дописывает кусок с позиции offset. Возвращает, сколько байт уже принято. */
+export async function appendChunk(id: string, offset: number, body: ReadableStream<Uint8Array> | null) {
+  const tmp = uploadTmp(id);
+  await fs.mkdir(TMP_DIR, { recursive: true });
+  if (offset === 0) await pruneStaleUploads();
+  const size = await tmpSize(tmp);
+  if (offset > size) throw new OffsetMismatch(size);
+  // Повтор куска после обрыва: отрезаем недописанный хвост.
+  if (offset < size) await fs.truncate(tmp, offset);
+  const source = body
+    ? Readable.fromWeb(body as import("node:stream/web").ReadableStream)
+    : Readable.from([]);
+  await pipeline(source, createWriteStream(tmp, { flags: "a" }));
+  return tmpSize(tmp);
+}
+
+/** Все куски на месте — кладём файл по его пути. */
+export async function finishUpload(id: string, relPath: string, total: number) {
+  const tmp = uploadTmp(id);
+  const size = await tmpSize(tmp);
+  if (size !== total) throw new OffsetMismatch(size);
+  const target = absPath(relPath);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.rename(tmp, target);
+}
+
 export async function openFile(relPath: string) {
   const abs = absPath(relPath);
   const stat = await fs.stat(abs);

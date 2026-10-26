@@ -65,6 +65,8 @@ code --install-extension exchanger-<версия>.vsix
 |---|---|---|
 | GET | `/api/files` | список `{ files: [{ path, name, size, mtime }] }` |
 | PUT | `/api/files?path=src/a.ts` | тело запроса — содержимое файла |
+| PUT | `/api/files/chunk?upload=<id>&offset=N` | кусок файла (страница и расширение шлют по 32 МБ); ответ `{ size }`, при `409` — продолжить с `size` |
+| POST | `/api/files/chunk?upload=<id>&path=src/a.bin&total=N` | все куски отправлены — файл ложится на место |
 | GET | `/api/files/raw?path=src/a.ts` | скачать |
 | DELETE | `/api/files?path=src/a.ts` / `?all=1` | удалить один / всё |
 
